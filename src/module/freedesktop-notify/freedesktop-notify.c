@@ -520,11 +520,16 @@ FcitxNotifySendNotification(FcitxNotify *notify, const char *appName,
         replaceId = 0;
     } else {
         replaceId = replace_item->global_id;
-        if (!replace_item->global_id) {
+        if (!replaceId) {
+            // Is probably only reusable if dbus callback is done...
+            // Too lazy to check for that.... :P
             _FcitxNotifyMarkNotifyRemove(notify, replace_item);
+            replace_item = NULL;
         } else {
-            FcitxNotifyItemRemoveGlobal(notify, replace_item);
-            FcitxNotifyItemUnref(replace_item);
+            // Treat replaced interal item specially, i.e. reuse and simply
+            // update it instead of creating a new one.
+            /* FcitxNotifyItemRemoveGlobal(notify, replace_item); */
+            /* FcitxNotifyItemUnref(replace_item); */
         }
     }
     if (!appIcon)
@@ -564,26 +569,46 @@ FcitxNotifySendNotification(FcitxNotify *notify, const char *appName,
                                         TIMEOUT_REAL_TIME * 1000 / 2);
     dbus_message_unref(msg);
 
-    if (!reply)
+    if (!reply) {
+        if (replace_item) {
+            FcitxNotifyItemRemoveGlobal(notify, replace_item);
+            FcitxNotifyItemUnref(replace_item);
+        }
         return 0;
+    }
 
     uint32_t intern_id;
-    while (fcitx_unlikely((intern_id = fcitx_utils_atomic_add(
-                               (int32_t*)&notify->notify_counter, 1)) == 0)) {
+    if (replace_item) {
+        intern_id = replace_item->replace_id;
+    } else {
+        while (fcitx_unlikely(
+                   (intern_id = fcitx_utils_atomic_add(
+                       (int32_t*)&notify->notify_counter, 1)) == 0)) {
+        }
     }
-    FcitxNotifyItem *item = fcitx_utils_new(FcitxNotifyItem);
-    item->intern_id = intern_id;
+    FcitxNotifyItem *item;
+    if (replace_item) {
+        item = replace_item;
+        if (replace_item->free_func) {
+            replace_item->free_func(replace_item->data);
+        }
+    } else {
+        item = fcitx_utils_new(FcitxNotifyItem);
+    }
     item->time = FcitxNotifyGetTime();
     item->free_func = freeFunc;
     item->callback = callback;
     item->data = userData;
-    // One for pending notify callback, one for table
-    item->ref_count = 2;
-    item->owner = notify;
+    if (!replace_item) {
+        item->intern_id = intern_id;
+        // One for pending notify callback, one for table
+        item->ref_count = 2;
+        item->owner = notify;
 
-    FcitxNotifyItemAddInternal(notify, item);
-    dbus_pending_call_set_notify(call, FcitxNotifyCallback, item,
-                                 (DBusFreeFunction)FcitxNotifyItemUnref);
+        FcitxNotifyItemAddInternal(notify, item);
+        dbus_pending_call_set_notify(call, FcitxNotifyCallback, item,
+                                     (DBusFreeFunction)FcitxNotifyItemUnref);
+    }
     dbus_pending_call_unref(call);
     FcitxNotifyCheckTimeout(notify);
     return intern_id;
@@ -627,7 +652,9 @@ FcitxNotifyShowTip(FcitxNotify *notify, const char *appName,
     data->notify = notify;
     notify->last_tip_id =
         FcitxNotifySendNotification(notify, appName, notify->last_tip_id,
-                                    appIcon, summary, body, notify->capabilities & NC_ACTIONS ? actions : NULL, timeout,
+                                    appIcon, summary, body,
+                                    notify->capabilities & NC_ACTIONS ?
+                                    actions : NULL, timeout,
                                     FcitxNotifyShowTipCallback, data, free);
 }
 
