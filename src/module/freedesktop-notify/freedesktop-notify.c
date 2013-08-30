@@ -579,7 +579,7 @@ FcitxNotifySendNotification(FcitxNotify *notify, const char *appName,
 
     uint32_t intern_id;
     if (replace_item) {
-        intern_id = replace_item->replace_id;
+        intern_id = replace_item->intern_id;
     } else {
         while (fcitx_unlikely(
                    (intern_id = fcitx_utils_atomic_add(
